@@ -1,0 +1,10 @@
+{
+    "name": "chat_copier",
+    "display_name": "Chat Copier",
+    "js": "index.js",
+    "css": "style.css",
+    "author": "You",
+    "version": "1.0.0",
+    "homePage": "https://github.com/yourname/chat-copier",
+    "auto_update": true
+}

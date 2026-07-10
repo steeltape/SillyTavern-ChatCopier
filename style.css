@@ -1,0 +1,88 @@
+/* ── Quick Menu (Wizard Icon) ──────────────────────────── */
+.cc_quick_menu {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    padding: 5px 0;
+    margin-top: 5px;
+    border-top: 1px solid var(--SmartThemeBorderColor, #333);
+    border-bottom: 1px solid var(--SmartThemeBorderColor, #333);
+}
+
+.cc_qbtn {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    padding: 5px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.75rem;
+    flex: 1 1 60px;
+    min-width: 60px;
+    transition: background 0.15s ease;
+}
+
+.cc_qbtn:hover {
+    background: var(--white30a, rgba(255, 255, 255, 0.15));
+}
+
+.cc_qbtn.cc_active {
+    background: var(--buttonNoteBackground, #2a6e3e);
+    color: var(--white, #fff);
+}
+
+.cc_qbtn i {
+    font-size: 1.1rem;
+}
+
+.cc_qbtn_label {
+    white-space: nowrap;
+}
+
+/* ── Settings Panel (Puzzle Icon) ──────────────────────── */
+.chat_copier_settings {
+    margin-bottom: 10px;
+}
+
+.cc_options {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid var(--SmartThemeBorderColor, #333);
+}
+
+.cc_options .checkbox_label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.85rem;
+    cursor: pointer;
+}
+
+.cc_options select {
+    margin-left: 6px;
+    padding: 2px 6px;
+    font-size: 0.85rem;
+    border-radius: 4px;
+    background: var(--black30a, rgba(0, 0, 0, 0.3));
+    color: var(--SmartThemeBodyColor, #eee);
+    border: 1px solid var(--SmartThemeBorderColor, #444);
+}
+
+/* ── Per-message checkbox ──────────────────────────────── */
+.cc_mes_select {
+    width: 20px;
+    height: 20px;
+    cursor: pointer;
+    margin: 0 8px 0 0;
+    flex-shrink: 0;
+    accent-color: #2a9e5a;
+    z-index: 10;
+    position: relative;
+    float: left;
+    margin-top: 2px;
+}
