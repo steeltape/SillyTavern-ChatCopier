@@ -12,7 +12,7 @@ A lightweight extension that lets you quickly copy chat messages to your clipboa
 
 1. Open SillyTavern and enable the **Extensions** panel (puzzle piece icon).
 2. Click the **Install Extension** button at the top.
-3. Enter the GitHub URL: `https://github.com/YourGitHubUsername/SillyTavern-ChatCopier`
+3. Enter the GitHub URL: `https://github.com/steeltape/SillyTavern-ChatCopier`
 4. Click **Install**.
 5. Refresh SillyTavern when prompted.
 6. The quick-access buttons will appear in the Extensions Wizard menu (magic wand icon next to the chatbox).
