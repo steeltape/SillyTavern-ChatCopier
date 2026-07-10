@@ -16,3 +16,5 @@ A lightweight extension that lets you quickly copy chat messages to your clipboa
 4. Click **Install**.
 5. Refresh SillyTavern when prompted.
 6. The quick-access buttons will appear in the Extensions Wizard menu (magic wand icon next to the chatbox).
+
+Also check out this presets for office romance/ casual lifestyle RP i edited : https://mypapercraft.net/sillytavern-preset-for-office-romance-casual-lifestyle-roleplay/
