@@ -16,9 +16,6 @@ const DEFAULT_SETTINGS = {
 
 function loadSettings() {
     extension_settings[MODULE_NAME] = extension_settings[MODULE_NAME] || {};
-    if (Object.keys(extension_settings[MODULE_NAME]).length === 0) {
-        Object.assign(extension_settings[MODULE_NAME], DEFAULT_SETTINGS);
-    }
     Object.assign(extension_settings[MODULE_NAME], {
         ...DEFAULT_SETTINGS,
         ...extension_settings[MODULE_NAME],
@@ -38,148 +35,309 @@ function updateSetting(key, value) {
 // ── Message gathering ─────────────────────────────────────────────
 
 function getChatMessages() {
-    const ctx = getContext();
-    return ctx.chat ?? [];
+    return getContext().chat ?? [];
+}
+
+function isRealMessage(message) {
+    return Boolean(message) && !message.is_system;
+}
+
+function cloneMessage(message) {
+    return { ...message };
 }
 
 function getSelectedMessages() {
     const messages = getChatMessages();
-    const result = [];
+    const selected = [];
 
     $(".mes").each(function () {
-        const $mes = $(this);
-        const $cb = $mes.find(".cc_mes_select");
-        
-        if ($cb.length && $cb.prop("checked")) {
-            // Read the 'mesid' attribute that SillyTavern assigns to each message
-            const mesId = Number($mes.attr("mesid"));
-            
-            if (!isNaN(mesId) && mesId >= 0 && mesId < messages.length) {
-                result.push(messages[mesId]);
-            }
-        }
+        const $messageElement = $(this);
+        const $checkbox = $messageElement.find(".cc_mes_select");
+
+        if (!$checkbox.length || !$checkbox.prop("checked")) return;
+
+        const messageId = Number($messageElement.attr("mesid"));
+        if (!Number.isInteger(messageId) || messageId < 0 || messageId >= messages.length) return;
+
+        const message = messages[messageId];
+        if (isRealMessage(message)) selected.push(cloneMessage(message));
     });
 
-    return result;
+    return selected;
 }
 
+function getRenderedMessageText(messageIndex) {
+    const $messageElement = $(`.mes[mesid="${messageIndex}"]`).last();
+    if (!$messageElement.length) return "";
+
+    const $textElement = $messageElement.find(".mes_text").first();
+    if (!$textElement.length) return "";
+
+    return $textElement.text().trim();
+}
+
+// Returns the newest N non-system messages, counted from the bottom of the
+// complete SillyTavern chat array, while preserving normal reading order.
 function getLastNMessages(n) {
-    const messages = getChatMessages();
-    return messages.slice(-n);
+    const limit = Math.max(0, Number.parseInt(n, 10) || 0);
+    if (limit === 0) return [];
+
+    const chat = getChatMessages();
+    const collected = [];
+
+    for (let index = chat.length - 1; index >= 0 && collected.length < limit; index--) {
+        const message = chat[index];
+        if (!isRealMessage(message)) continue;
+
+        collected.push({
+            message: cloneMessage(message),
+            chatIndex: index,
+        });
+    }
+
+    collected.reverse();
+
+    // During or immediately after generation, ctx.chat can lag a few words
+    // behind the text already visible in the newest rendered message.
+    const newest = collected[collected.length - 1];
+    if (newest) {
+        const renderedText = getRenderedMessageText(newest.chatIndex);
+        const storedText = String(newest.message.mes ?? "").trim();
+
+        if (renderedText && renderedText.length >= storedText.length) {
+            newest.message.mes = renderedText;
+        }
+    }
+
+    return collected.map((entry) => entry.message);
+}
+
+function getAllMessages() {
+    return getChatMessages()
+        .filter(isRealMessage)
+        .map(cloneMessage);
 }
 
 // ── Formatting ────────────────────────────────────────────────────
 
-function formatMessage(msg, settings) {
-    const role = msg.is_user
-        ? "User"
-        : msg.name || "Character";
-    const text = msg.mes ?? "";
-    let line;
+function formatMessage(message, settings) {
+    const role = message.is_user ? "User" : message.name || "Character";
+    const text = String(message.mes ?? "");
 
-    if (settings.copyFormat === "markdown") {
-        line = `**${role}**: ${text}`;
-    } else {
-        line = `${role}: ${text}`;
+    let formatted = settings.includeNames
+        ? settings.copyFormat === "markdown"
+            ? `**${role}**: ${text}`
+            : `${role}: ${text}`
+        : text;
+
+    if (settings.includeTimestamps && message.send_date) {
+        formatted = `[${message.send_date}] ${formatted}`;
     }
 
-    if (settings.includeTimestamps && msg.send_date) {
-        line = `[${msg.send_date}] ${line}`;
-    }
-
-    if (!settings.includeNames) {
-        line = text;
-        if (settings.includeTimestamps && msg.send_date) {
-            line = `[${msg.send_date}] ${line}`;
-        }
-    }
-
-    return line;
+    return formatted;
 }
 
 function messagesToText(messages) {
     const settings = getSettings();
-    return messages
-        .map((msg) => formatMessage(msg, settings))
-        .join("\n\n");
+    return messages.map((message) => formatMessage(message, settings)).join("\n\n");
 }
 
 // ── Clipboard ─────────────────────────────────────────────────────
 
-async function copyToClipboard(text) {
-    try {
-        await navigator.clipboard.writeText(text);
-        toastr.success("Copied to clipboard!", "Chat Copier");
-    } catch (err) {
-        const textarea = document.createElement("textarea");
-        textarea.value = text;
-        textarea.style.position = "fixed";
-        textarea.style.opacity = "0";
-        document.body.appendChild(textarea);
-        textarea.select();
+function copyWithClipboardEvent(text) {
+    let handled = false;
+
+    const onCopy = (event) => {
         try {
-            document.execCommand("copy");
-            toastr.success("Copied to clipboard!", "Chat Copier");
-        } catch (err2) {
-            toastr.error("Failed to copy.", "Chat Copier");
+            event.preventDefault();
+            event.clipboardData.clearData();
+            event.clipboardData.setData("text/plain", text);
+            handled = true;
+        } catch (error) {
+            console.error("[Chat Copier] Clipboard event failed.", error);
         }
-        document.body.removeChild(textarea);
+    };
+
+    document.addEventListener("copy", onCopy, { once: true, capture: true });
+
+    try {
+        const commandSucceeded = document.execCommand("copy");
+        return commandSucceeded && handled;
+    } catch (error) {
+        console.warn("[Chat Copier] execCommand copy failed.", error);
+        document.removeEventListener("copy", onCopy, { capture: true });
+        return false;
+    }
+}
+
+async function copyToClipboard(text, count) {
+    const clipboardText = String(text ?? "");
+
+    if (!clipboardText) {
+        toastr.warning("Nothing to copy.", "Chat Copier");
+        return;
+    }
+
+    // Use a synchronous ClipboardEvent first. On Android WebView this avoids
+    // selection-length and delayed-write issues that can truncate the tail of
+    // larger clipboard payloads.
+    if (copyWithClipboardEvent(clipboardText)) {
+        toastr.success(`Copied ${count} message(s) to clipboard!`, "Chat Copier");
+        return;
+    }
+
+    // Standards-based fallback.
+    try {
+        if (navigator.clipboard && window.isSecureContext) {
+            await navigator.clipboard.writeText(clipboardText);
+            toastr.success(`Copied ${count} message(s) to clipboard!`, "Chat Copier");
+            return;
+        }
+    } catch (error) {
+        console.warn("[Chat Copier] Clipboard API failed.", error);
+    }
+
+    // Final fallback using a visible-size textarea and a synchronous selection.
+    const textarea = document.createElement("textarea");
+    textarea.value = clipboardText;
+    textarea.setAttribute("readonly", "");
+    textarea.style.position = "fixed";
+    textarea.style.left = "8px";
+    textarea.style.top = "8px";
+    textarea.style.width = "2px";
+    textarea.style.height = "2px";
+    textarea.style.opacity = "0.01";
+    textarea.style.zIndex = "2147483647";
+
+    document.body.appendChild(textarea);
+    textarea.focus({ preventScroll: true });
+    textarea.select();
+    textarea.setSelectionRange(0, clipboardText.length);
+
+    let copied = false;
+    try {
+        copied = document.execCommand("copy");
+    } catch (error) {
+        console.error("[Chat Copier] Textarea fallback failed.", error);
+    } finally {
+        textarea.remove();
+    }
+
+    if (copied) {
+        toastr.success(`Copied ${count} message(s) to clipboard!`, "Chat Copier");
+    } else {
+        toastr.error("Android blocked clipboard access.", "Chat Copier");
     }
 }
 
 // ── Actions ────────────────────────────────────────────────────────
 
-function actionCopySelected() {
+function downloadTextFile(text, filename) {
+    const blob = new Blob([String(text ?? "")], {
+        type: "text/plain;charset=utf-8",
+    });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+
+    anchor.href = url;
+    anchor.download = filename;
+    anchor.style.display = "none";
+
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+
+    window.setTimeout(() => URL.revokeObjectURL(url), 1500);
+}
+
+function makeDownloadTimestamp() {
+    return new Date().toISOString().replace(/[:.]/g, "-");
+}
+
+async function actionCopySelected() {
     const selected = getSelectedMessages();
+
     if (selected.length === 0) {
-        toastr.warning(
-            "No messages selected. Toggle Select Mode and tick messages first.",
-            "Chat Copier"
-        );
+        toastr.warning("No messages selected.", "Chat Copier");
         return;
     }
-    copyToClipboard(messagesToText(selected));
+
+    await copyToClipboard(messagesToText(selected), selected.length);
 }
 
-function actionCopyLastN(n) {
+async function actionCopyLastN(n) {
     const messages = getLastNMessages(n);
+
     if (messages.length === 0) {
         toastr.warning("No messages to copy.", "Chat Copier");
         return;
     }
-    copyToClipboard(messagesToText(messages));
+
+    await copyToClipboard(messagesToText(messages), messages.length);
 }
 
-function actionCopyAll() {
-    const messages = getChatMessages();
+function actionDownloadLast20() {
+    const messages = getLastNMessages(20);
+
     if (messages.length === 0) {
-        toastr.warning("No messages to copy.", "Chat Copier");
+        toastr.warning("No messages to export.", "Chat Copier");
         return;
     }
-    copyToClipboard(messagesToText(messages));
+
+    downloadTextFile(
+        messagesToText(messages),
+        `sillytavern-last-20-${makeDownloadTimestamp()}.txt`,
+    );
+
+    toastr.success(
+        `Downloaded the last ${messages.length} message(s) as TXT.`,
+        "Chat Copier",
+    );
 }
 
-// ── Selection mode: inject checkboxes ──────────────────────────────
+function actionDownloadAll() {
+    const messages = getAllMessages();
+
+    if (messages.length === 0) {
+        toastr.warning("No messages to export.", "Chat Copier");
+        return;
+    }
+
+    // Refresh the newest message from the rendered DOM so a just-finished
+    // response is not missing its final words in the exported file.
+    const newest = getLastNMessages(1)[0];
+    if (newest) {
+        messages[messages.length - 1] = newest;
+    }
+
+    downloadTextFile(
+        messagesToText(messages),
+        `sillytavern-complete-chat-${makeDownloadTimestamp()}.txt`,
+    );
+
+    toastr.success(
+        `Downloaded all ${messages.length} message(s) as TXT.`,
+        "Chat Copier",
+    );
+}
+
+// ── Selection mode ────────────────────────────────────────────────
 
 let selectMode = false;
 
 function injectCheckboxes() {
     if (!selectMode) return;
 
-    $(".mes").each(function () {
-        const $mes = $(this);
-        if ($mes.find(".cc_mes_select").length === 0) {
-            const $head = $mes.find(".mes_block, .mesHeader, .mes_text_wrapper, .mesTextWrapper").first();
-            if ($head.length) {
-                $head.prepend(
-                    '<input type="checkbox" class="cc_mes_select" title="Select this message" />'
-                );
-            } else {
-                $mes.prepend(
-                    '<input type="checkbox" class="cc_mes_select" title="Select this message" />'
-                );
-            }
-        }
+    $(".mes").not(".system_message").each(function () {
+        const $message = $(this);
+        if ($message.find(".cc_mes_select").length) return;
+
+        const $header = $message
+            .find(".mes_block, .mesHeader, .mes_text_wrapper, .mesTextWrapper")
+            .first();
+
+        const checkbox = '<input type="checkbox" class="cc_mes_select" title="Select this message" />';
+        $header.length ? $header.prepend(checkbox) : $message.prepend(checkbox);
     });
 }
 
@@ -189,6 +347,7 @@ function removeCheckboxes() {
 
 function toggleSelectMode() {
     selectMode = !selectMode;
+
     if (selectMode) {
         injectCheckboxes();
         $("#cc_select_mode_btn").addClass("cc_active");
@@ -200,45 +359,44 @@ function toggleSelectMode() {
     }
 }
 
-// ── Build Quick Menu (Wizard Icon next to chatbox) ────────────────
+// ── Quick menu ────────────────────────────────────────────────────
 
 function buildQuickMenu() {
-    if ($("#cc_quick_menu").length > 0) return;
+    if ($("#cc_quick_menu").length) return;
 
     const html = `
     <div id="cc_quick_menu" class="cc_quick_menu">
-        <div id="cc_select_mode_btn" class="cc_qbtn" title="Toggle selection mode to add ticks to messages">
+        <div id="cc_select_mode_btn" class="cc_qbtn" title="Toggle selection mode">
             <i class="fa fa-check-square"></i>
             <span class="cc_qbtn_label">Select: OFF</span>
         </div>
-        <div id="cc_copy_selected" class="cc_qbtn" title="Copy selected messages">
+        <div id="cc_copy_selected" class="cc_qbtn" title="Copy ticked messages">
             <i class="fa fa-copy"></i>
             <span class="cc_qbtn_label">Copy Tick</span>
         </div>
-        <div id="cc_copy_last10" class="cc_qbtn" title="Copy last 10 messages">
+        <div id="cc_copy_last10" class="cc_qbtn" title="Copy last 10 messages from the bottom">
             <i class="fa fa-history"></i>
             <span class="cc_qbtn_label">10</span>
         </div>
-        <div id="cc_copy_last20" class="cc_qbtn" title="Copy last 20 messages">
-            <i class="fa fa-clock"></i>
-            <span class="cc_qbtn_label">20</span>
+        <div id="cc_copy_last20" class="cc_qbtn" title="Download last 20 messages as TXT">
+            <i class="fa fa-download"></i>
+            <span class="cc_qbtn_label">20 TXT</span>
         </div>
-        <div id="cc_copy_all" class="cc_qbtn" title="Copy entire chat">
-            <i class="fa fa-file-export"></i>
-            <span class="cc_qbtn_label">All</span>
+        <div id="cc_copy_all" class="cc_qbtn" title="Download entire chat as TXT">
+            <i class="fa fa-file-download"></i>
+            <span class="cc_qbtn_label">All TXT</span>
         </div>
     </div>`;
 
     $("#extensionsMenu").append(html);
 }
 
-// ── Build Settings Panel (Puzzle Icon menu) ───────────────────────
+// ── Settings panel ────────────────────────────────────────────────
 
 function buildSettingsPanel() {
-    if ($("#chat_copier_settings").length > 0) return;
+    if ($("#chat_copier_settings").length) return;
 
     const settings = getSettings();
-
     const html = `
     <div id="chat_copier_settings" class="chat_copier_settings">
         <div class="inline-drawer">
@@ -271,74 +429,70 @@ function buildSettingsPanel() {
     $("#extensions_settings").append(html);
 }
 
-// ── MutationObserver: detect new messages ─────────────────────────
+// ── Mutation observer ─────────────────────────────────────────────
 
 let observer = null;
 
 function setupObserver() {
-    const chatEl = document.getElementById("chat");
-    if (!chatEl) {
-        setTimeout(setupObserver, 1000);
+    const chatElement = document.getElementById("chat");
+
+    if (!chatElement) {
+        window.setTimeout(setupObserver, 1000);
         return;
     }
 
-    observer = new MutationObserver(function (mutations) {
-        let newMessage = false;
-        for (const mutation of mutations) {
-            if (mutation.addedNodes.length > 0) {
-                for (const node of mutation.addedNodes) {
-                    if (
-                        node.nodeType === 1 &&
-                        (node.classList?.contains("mes") ||
-                            node.querySelector?.(".mes"))
-                    ) {
-                        newMessage = true;
-                        break;
-                    }
-                }
-            }
-            if (newMessage) break;
-        }
+    observer?.disconnect();
+    observer = new MutationObserver((mutations) => {
+        if (!selectMode) return;
 
-        if (newMessage && selectMode) {
-            setTimeout(injectCheckboxes, 300);
-        }
+        const hasNewMessage = mutations.some((mutation) =>
+            Array.from(mutation.addedNodes).some(
+                (node) =>
+                    node.nodeType === Node.ELEMENT_NODE &&
+                    (node.classList?.contains("mes") || node.querySelector?.(".mes")),
+            ),
+        );
+
+        if (hasNewMessage) window.setTimeout(injectCheckboxes, 300);
     });
 
-    observer.observe(chatEl, { childList: true, subtree: true });
+    observer.observe(chatElement, { childList: true, subtree: true });
 }
 
 // ── Event binding ─────────────────────────────────────────────────
 
 function bindEvents() {
-    $(document).on("click", "#cc_select_mode_btn", toggleSelectMode);
-    $(document).on("click", "#cc_copy_selected", actionCopySelected);
-    $(document).on("click", "#cc_copy_last10", () => actionCopyLastN(10));
-    $(document).on("click", "#cc_copy_last20", () => actionCopyLastN(20));
-    $(document).on("click", "#cc_copy_all", actionCopyAll);
+    $(document).off(".chatCopier");
 
-    $(document).on("change", "#cc_include_names", function () {
+    $(document).on("click.chatCopier", "#cc_select_mode_btn", toggleSelectMode);
+    $(document).on("click.chatCopier", "#cc_copy_selected", actionCopySelected);
+    $(document).on("click.chatCopier", "#cc_copy_last10", () => actionCopyLastN(10));
+    $(document).on("click.chatCopier", "#cc_copy_last20", actionDownloadLast20);
+    $(document).on("click.chatCopier", "#cc_copy_all", actionDownloadAll);
+
+    $(document).on("change.chatCopier", "#cc_include_names", function () {
         updateSetting("includeNames", $(this).prop("checked"));
     });
-    $(document).on("change", "#cc_include_timestamps", function () {
+
+    $(document).on("change.chatCopier", "#cc_include_timestamps", function () {
         updateSetting("includeTimestamps", $(this).prop("checked"));
     });
-    $(document).on("change", "#cc_format", function () {
+
+    $(document).on("change.chatCopier", "#cc_format", function () {
         updateSetting("copyFormat", $(this).val());
     });
 }
 
 // ── Init ──────────────────────────────────────────────────────────
 
-jQuery(async () => {
+jQuery(() => {
     loadSettings();
 
-    setTimeout(() => {
+    window.setTimeout(() => {
         buildQuickMenu();
         buildSettingsPanel();
         bindEvents();
         setupObserver();
-
         console.log("[Chat Copier] Extension loaded successfully.");
     }, 1500);
 });
