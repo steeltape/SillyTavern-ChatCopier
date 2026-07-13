@@ -4,8 +4,9 @@ A lightweight extension that lets you quickly copy chat messages to your clipboa
 
 ## Features
 - **Copy Ticked** — Copies every message you have ticked via Select Mode.
-- **Last 10 / 20** — Quickly copies the last 10 or 20 messages.
-- **Copy All** — Copies the entire current chat.
+- **Last 10** — Quickly copies the last 10
+- **Copy 20** the last 20 messages in txt.
+- **Copy All** — Copies the entire current chat in txt.
 - **Formatting Options** — Toggle names, timestamps, and plain/markdown format.
 
 ## Installation
