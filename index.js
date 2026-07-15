@@ -262,7 +262,22 @@ async function actionCopySelected() {
         return;
     }
 
-    await copyToClipboard(messagesToText(selected), selected.length);
+    const text = messagesToText(selected);
+
+    if (selected.length > 20) {
+        downloadTextFile(
+            text,
+            `sillytavern-selected-${selected.length}-${makeDownloadTimestamp()}.txt`,
+        );
+
+        toastr.success(
+            `Downloaded ${selected.length} selected message(s) as TXT.`,
+            "Chat Copier",
+        );
+        return;
+    }
+
+    await copyToClipboard(text, selected.length);
 }
 
 async function actionCopyLastN(n) {
@@ -276,8 +291,8 @@ async function actionCopyLastN(n) {
     await copyToClipboard(messagesToText(messages), messages.length);
 }
 
-function actionDownloadLast20() {
-    const messages = getLastNMessages(20);
+function actionDownloadLastN(n) {
+    const messages = getLastNMessages(n);
 
     if (messages.length === 0) {
         toastr.warning("No messages to export.", "Chat Copier");
@@ -286,7 +301,7 @@ function actionDownloadLast20() {
 
     downloadTextFile(
         messagesToText(messages),
-        `sillytavern-last-20-${makeDownloadTimestamp()}.txt`,
+        `sillytavern-last-${n}-${makeDownloadTimestamp()}.txt`,
     );
 
     toastr.success(
@@ -382,6 +397,10 @@ function buildQuickMenu() {
             <i class="fa fa-download"></i>
             <span class="cc_qbtn_label">20 TXT</span>
         </div>
+        <div id="cc_copy_last30" class="cc_qbtn" title="Download last 30 messages as TXT">
+            <i class="fa fa-download"></i>
+            <span class="cc_qbtn_label">30 TXT</span>
+        </div>
         <div id="cc_copy_all" class="cc_qbtn" title="Download entire chat as TXT">
             <i class="fa fa-file-download"></i>
             <span class="cc_qbtn_label">All TXT</span>
@@ -467,7 +486,8 @@ function bindEvents() {
     $(document).on("click.chatCopier", "#cc_select_mode_btn", toggleSelectMode);
     $(document).on("click.chatCopier", "#cc_copy_selected", actionCopySelected);
     $(document).on("click.chatCopier", "#cc_copy_last10", () => actionCopyLastN(10));
-    $(document).on("click.chatCopier", "#cc_copy_last20", actionDownloadLast20);
+    $(document).on("click.chatCopier", "#cc_copy_last20", () => actionDownloadLastN(20));
+    $(document).on("click.chatCopier", "#cc_copy_last30", () => actionDownloadLastN(30));
     $(document).on("click.chatCopier", "#cc_copy_all", actionDownloadAll);
 
     $(document).on("change.chatCopier", "#cc_include_names", function () {
