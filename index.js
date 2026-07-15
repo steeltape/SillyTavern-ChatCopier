@@ -250,8 +250,32 @@ function downloadTextFile(text, filename) {
     window.setTimeout(() => URL.revokeObjectURL(url), 1500);
 }
 
-function makeDownloadTimestamp() {
-    return new Date().toISOString().replace(/[:.]/g, "-");
+function sanitizeFilenamePart(value, fallback = "chat") {
+    const cleaned = String(value ?? "")
+        .replace(/[\\/:*?"<>|]/g, "-")
+        .replace(/\s+/g, " ")
+        .trim()
+        .replace(/[. ]+$/g, "");
+
+    return cleaned || fallback;
+}
+
+function getChatFilenamePrefix() {
+    const ctx = getContext();
+    const characterName =
+        ctx?.name2 ||
+        ctx?.character?.name ||
+        ctx?.characters?.[ctx?.characterId]?.name ||
+        "SillyTavern Chat";
+
+    const now = new Date();
+    const date = [
+        now.getFullYear(),
+        String(now.getMonth() + 1).padStart(2, "0"),
+        String(now.getDate()).padStart(2, "0"),
+    ].join("-");
+
+    return `${sanitizeFilenamePart(characterName)} - ${date}`;
 }
 
 async function actionCopySelected() {
@@ -267,7 +291,7 @@ async function actionCopySelected() {
     if (selected.length > 20) {
         downloadTextFile(
             text,
-            `sillytavern-selected-${selected.length}-${makeDownloadTimestamp()}.txt`,
+            `${getChatFilenamePrefix()} - Selected ${selected.length}.txt`,
         );
 
         toastr.success(
@@ -301,7 +325,7 @@ function actionDownloadLastN(n) {
 
     downloadTextFile(
         messagesToText(messages),
-        `sillytavern-last-${n}-${makeDownloadTimestamp()}.txt`,
+        `${getChatFilenamePrefix()} - Last ${n}.txt`,
     );
 
     toastr.success(
@@ -327,7 +351,7 @@ function actionDownloadAll() {
 
     downloadTextFile(
         messagesToText(messages),
-        `sillytavern-complete-chat-${makeDownloadTimestamp()}.txt`,
+        `${getChatFilenamePrefix()} - Full Chat.txt`,
     );
 
     toastr.success(
@@ -392,10 +416,6 @@ function buildQuickMenu() {
         <div id="cc_copy_last10" class="cc_qbtn" title="Copy last 10 messages from the bottom">
             <i class="fa fa-history"></i>
             <span class="cc_qbtn_label">10</span>
-        </div>
-        <div id="cc_copy_last20" class="cc_qbtn" title="Download last 20 messages as TXT">
-            <i class="fa fa-download"></i>
-            <span class="cc_qbtn_label">20 TXT</span>
         </div>
         <div id="cc_copy_last30" class="cc_qbtn" title="Download last 30 messages as TXT">
             <i class="fa fa-download"></i>
@@ -486,7 +506,6 @@ function bindEvents() {
     $(document).on("click.chatCopier", "#cc_select_mode_btn", toggleSelectMode);
     $(document).on("click.chatCopier", "#cc_copy_selected", actionCopySelected);
     $(document).on("click.chatCopier", "#cc_copy_last10", () => actionCopyLastN(10));
-    $(document).on("click.chatCopier", "#cc_copy_last20", () => actionDownloadLastN(20));
     $(document).on("click.chatCopier", "#cc_copy_last30", () => actionDownloadLastN(30));
     $(document).on("click.chatCopier", "#cc_copy_all", actionDownloadAll);
 
