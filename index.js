@@ -46,24 +46,51 @@ function cloneMessage(message) {
     return { ...message };
 }
 
+const selectedMessageIds = new Set();
+
 function getSelectedMessages() {
     const messages = getChatMessages();
     const selected = [];
 
-    $(".mes").each(function () {
-        const $messageElement = $(this);
-        const $checkbox = $messageElement.find(".cc_mes_select");
-
-        if (!$checkbox.length || !$checkbox.prop("checked")) return;
-
-        const messageId = Number($messageElement.attr("mesid"));
-        if (!Number.isInteger(messageId) || messageId < 0 || messageId >= messages.length) return;
-
-        const message = messages[messageId];
-        if (isRealMessage(message)) selected.push(cloneMessage(message));
-    });
+    [...selectedMessageIds]
+        .sort((a, b) => a - b)
+        .forEach((messageId) => {
+            if (messageId < 0 || messageId >= messages.length) return;
+            const message = messages[messageId];
+            if (isRealMessage(message)) selected.push(cloneMessage(message));
+        });
 
     return selected;
+}
+
+function selectLastNMessages(n) {
+    const limit = Math.max(0, Number.parseInt(n, 10) || 0);
+    const messages = getChatMessages();
+
+    selectedMessageIds.clear();
+
+    for (let index = messages.length - 1; index >= 0 && selectedMessageIds.size < limit; index--) {
+        if (isRealMessage(messages[index])) selectedMessageIds.add(index);
+    }
+
+    if (!selectMode) selectMode = true;
+    injectCheckboxes();
+    syncCheckboxesFromSelection();
+
+    $("#cc_select_mode_btn").addClass("cc_active");
+    $("#cc_select_mode_btn .cc_qbtn_label").text("Select: ON");
+
+    toastr.success(
+        `Selected the last ${selectedMessageIds.size} message(s) from the bottom.`,
+        "Chat Copier",
+    );
+}
+
+function syncCheckboxesFromSelection() {
+    $(".mes").not(".system_message").each(function () {
+        const messageId = Number($(this).attr("mesid"));
+        $(this).find(".cc_mes_select").prop("checked", selectedMessageIds.has(messageId));
+    });
 }
 
 function getRenderedMessageText(messageIndex) {
@@ -375,9 +402,13 @@ function injectCheckboxes() {
             .find(".mes_block, .mesHeader, .mes_text_wrapper, .mesTextWrapper")
             .first();
 
-        const checkbox = '<input type="checkbox" class="cc_mes_select" title="Select this message" />';
+        const messageId = Number($message.attr("mesid"));
+        const checked = selectedMessageIds.has(messageId) ? " checked" : "";
+        const checkbox = `<input type="checkbox" class="cc_mes_select" title="Select this message"${checked} />`;
         $header.length ? $header.prepend(checkbox) : $message.prepend(checkbox);
     });
+
+    syncCheckboxesFromSelection();
 }
 
 function removeCheckboxes() {
@@ -392,6 +423,7 @@ function toggleSelectMode() {
         $("#cc_select_mode_btn").addClass("cc_active");
         $("#cc_select_mode_btn .cc_qbtn_label").text("Select: ON");
     } else {
+        selectedMessageIds.clear();
         removeCheckboxes();
         $("#cc_select_mode_btn").removeClass("cc_active");
         $("#cc_select_mode_btn .cc_qbtn_label").text("Select: OFF");
@@ -409,9 +441,17 @@ function buildQuickMenu() {
             <i class="fa fa-check-square"></i>
             <span class="cc_qbtn_label">Select: OFF</span>
         </div>
-        <div id="cc_copy_selected" class="cc_qbtn" title="Copy ticked messages">
+        <div id="cc_copy_selected" class="cc_qbtn" title="Copy or download ticked messages">
             <i class="fa fa-copy"></i>
             <span class="cc_qbtn_label">Copy Tick</span>
+        </div>
+        <div id="cc_select_last50" class="cc_qbtn" title="Automatically select the last 50 messages">
+            <i class="fa fa-list-check"></i>
+            <span class="cc_qbtn_label">Select 50</span>
+        </div>
+        <div id="cc_select_last100" class="cc_qbtn" title="Automatically select the last 100 messages">
+            <i class="fa fa-list-check"></i>
+            <span class="cc_qbtn_label">Select 100</span>
         </div>
         <div id="cc_copy_last10" class="cc_qbtn" title="Copy last 10 messages from the bottom">
             <i class="fa fa-history"></i>
@@ -505,6 +545,15 @@ function bindEvents() {
 
     $(document).on("click.chatCopier", "#cc_select_mode_btn", toggleSelectMode);
     $(document).on("click.chatCopier", "#cc_copy_selected", actionCopySelected);
+    $(document).on("click.chatCopier", "#cc_select_last50", () => selectLastNMessages(50));
+    $(document).on("click.chatCopier", "#cc_select_last100", () => selectLastNMessages(100));
+    $(document).on("change.chatCopier", ".cc_mes_select", function () {
+        const messageId = Number($(this).closest(".mes").attr("mesid"));
+        if (!Number.isInteger(messageId)) return;
+
+        if ($(this).prop("checked")) selectedMessageIds.add(messageId);
+        else selectedMessageIds.delete(messageId);
+    });
     $(document).on("click.chatCopier", "#cc_copy_last10", () => actionCopyLastN(10));
     $(document).on("click.chatCopier", "#cc_copy_last30", () => actionDownloadLastN(30));
     $(document).on("click.chatCopier", "#cc_copy_all", actionDownloadAll);
