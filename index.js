@@ -47,8 +47,18 @@ function cloneMessage(message) {
 }
 
 const selectedMessageIds = new Set();
+let autoSelectedMessages = null;
+let autoSelectionExportCount = 0;
 
 function getSelectedMessages() {
+    // Auto-select 50/100 keeps a real snapshot of the messages instead of
+    // depending on rendered mesid values. This is important on Android, where
+    // SillyTavern may only render part of a long chat and DOM mesid values can
+    // be sparse while scrolling/lazy loading.
+    if (Array.isArray(autoSelectedMessages) && autoSelectedMessages.length) {
+        return autoSelectedMessages.map(cloneMessage);
+    }
+
     const messages = getChatMessages();
     const selected = [];
 
@@ -67,6 +77,11 @@ function selectLastNMessages(n) {
     const limit = Math.max(0, Number.parseInt(n, 10) || 0);
     const messages = getChatMessages();
 
+    // Keep the actual selected messages as the source of truth for Copy Tick.
+    // The Set below is only used to visually tick whichever messages Android
+    // currently has rendered.
+    autoSelectedMessages = getLastNMessages(limit).map(cloneMessage);
+    autoSelectionExportCount = limit;
     selectedMessageIds.clear();
 
     for (let index = messages.length - 1; index >= 0 && selectedMessageIds.size < limit; index--) {
@@ -81,7 +96,7 @@ function selectLastNMessages(n) {
     $("#cc_select_mode_btn .cc_qbtn_label").text("Select: ON");
 
     toastr.success(
-        `Selected the last ${selectedMessageIds.size} message(s) from the bottom.`,
+        `Selected the last ${autoSelectedMessages.length} message(s) from the bottom.`,
         "Chat Copier",
     );
 }
@@ -287,6 +302,20 @@ function sanitizeFilenamePart(value, fallback = "chat") {
     return cleaned || fallback;
 }
 
+function getRandomFileToken(length = 6) {
+    const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+    const bytes = new Uint8Array(length);
+
+    if (window.crypto?.getRandomValues) {
+        window.crypto.getRandomValues(bytes);
+        return Array.from(bytes, (value) => alphabet[value % alphabet.length]).join("");
+    }
+
+    return Array.from({ length }, () =>
+        alphabet[Math.floor(Math.random() * alphabet.length)]
+    ).join("");
+}
+
 function getChatFilenamePrefix() {
     const ctx = getContext();
     const characterName =
@@ -302,10 +331,33 @@ function getChatFilenamePrefix() {
         String(now.getDate()).padStart(2, "0"),
     ].join("-");
 
-    return `${sanitizeFilenamePart(characterName)} - ${date}`;
+    return `${sanitizeFilenamePart(characterName)} - ${date} - ${getRandomFileToken()}`;
 }
 
-async function actionCopySelected() {
+function actionCopySelected() {
+    // Auto Select 50/100 is an export mode. Copy Tick must always download
+    // those messages as TXT, just like the dedicated 30 TXT and All TXT
+    // actions, rather than relying on clipboard size or rendered checkboxes.
+    if (autoSelectionExportCount === 50 || autoSelectionExportCount === 100) {
+        const selected = getLastNMessages(autoSelectionExportCount);
+
+        if (selected.length === 0) {
+            toastr.warning("No messages selected.", "Chat Copier");
+            return;
+        }
+
+        downloadTextFile(
+            messagesToText(selected),
+            `${getChatFilenamePrefix()} - Last ${selected.length}.txt`,
+        );
+
+        toastr.success(
+            `Downloaded the last ${selected.length} message(s) as TXT.`,
+            "Chat Copier",
+        );
+        return;
+    }
+
     const selected = getSelectedMessages();
 
     if (selected.length === 0) {
@@ -328,7 +380,7 @@ async function actionCopySelected() {
         return;
     }
 
-    await copyToClipboard(text, selected.length);
+    copyToClipboard(text, selected.length);
 }
 
 async function actionCopyLastN(n) {
@@ -424,6 +476,8 @@ function toggleSelectMode() {
         $("#cc_select_mode_btn .cc_qbtn_label").text("Select: ON");
     } else {
         selectedMessageIds.clear();
+        autoSelectedMessages = null;
+        autoSelectionExportCount = 0;
         removeCheckboxes();
         $("#cc_select_mode_btn").removeClass("cc_active");
         $("#cc_select_mode_btn .cc_qbtn_label").text("Select: OFF");
@@ -548,6 +602,10 @@ function bindEvents() {
     $(document).on("click.chatCopier", "#cc_select_last50", () => selectLastNMessages(50));
     $(document).on("click.chatCopier", "#cc_select_last100", () => selectLastNMessages(100));
     $(document).on("change.chatCopier", ".cc_mes_select", function () {
+        // Once the user manually changes a checkbox, return to normal manual
+        // selection semantics rather than keeping the 50/100 snapshot locked.
+        autoSelectedMessages = null;
+        autoSelectionExportCount = 0;
         const messageId = Number($(this).closest(".mes").attr("mesid"));
         if (!Number.isInteger(messageId)) return;
 
