@@ -35,17 +35,24 @@ function updateSetting(key, value) {
 // ── Message gathering ─────────────────────────────────────────────
 
 function getChatMessages() {
-    return getContext().chat ?? [];
+    let chat = getContext().chat ?? [];
+    if (chat.length === 0 && window.chat && Array.isArray(window.chat)) {
+        console.log("[Chat Copier] Using window.chat as fallback (length: " + window.chat.length + ")");
+        chat = window.chat;
+    }
+    return chat;
 }
 
-// FIX: More inclusive filter – include all user/character messages
-// that have a 'mes' field. Exclude only explicit system messages.
+// Accept all conversation messages – include those with 'name' even if is_system is true.
 function isRealMessage(message) {
     if (!message) return false;
-    // Explicit system messages are excluded
-    if (message.is_system === true) return false;
-    // Include messages that have content and are from a known actor
-    return message.mes !== undefined && (message.is_user || message.name);
+
+    // Must have text content
+    const text = message.mes || message.text || message.content || "";
+    if (!text || text.trim() === "") return false;
+
+    // Accept if it's a user, has a name, or a recognized role
+    return !!(message.is_user || message.name || message.role === "user" || message.role === "assistant");
 }
 
 function cloneMessage(message) {
@@ -57,10 +64,6 @@ let autoSelectedMessages = null;
 let autoSelectionExportCount = 0;
 
 function getSelectedMessages() {
-    // Auto-select 50/100 keeps a real snapshot of the messages instead of
-    // depending on rendered mesid values. This is important on Android, where
-    // SillyTavern may only render part of a long chat and DOM mesid values can
-    // be sparse while scrolling/lazy loading.
     if (Array.isArray(autoSelectedMessages) && autoSelectedMessages.length) {
         return autoSelectedMessages.map(cloneMessage);
     }
@@ -83,16 +86,27 @@ function selectLastNMessages(n) {
     const limit = Math.max(0, Number.parseInt(n, 10) || 0);
     const messages = getChatMessages();
 
-    // Keep the actual selected messages as the source of truth for Copy Tick.
-    // The Set below is only used to visually tick whichever messages Android
-    // currently has rendered.
+    console.log(`[Chat Copier] Selecting last ${limit} messages. Chat length: ${messages.length}`);
+
+    // Debug: show first few messages
+    if (messages.length > 0) {
+        console.log("[Chat Copier] Sample message keys:", Object.keys(messages[0]));
+        console.log("[Chat Copier] Sample message:", messages[0]);
+    }
+
     autoSelectedMessages = getLastNMessages(limit).map(cloneMessage);
     autoSelectionExportCount = limit;
     selectedMessageIds.clear();
 
-    for (let index = messages.length - 1; index >= 0 && selectedMessageIds.size < limit; index--) {
-        if (isRealMessage(messages[index])) selectedMessageIds.add(index);
+    let found = 0;
+    for (let index = messages.length - 1; index >= 0 && found < limit; index--) {
+        if (isRealMessage(messages[index])) {
+            selectedMessageIds.add(index);
+            found++;
+        }
     }
+
+    console.log(`[Chat Copier] Actually found ${found} real messages.`);
 
     if (!selectMode) selectMode = true;
     injectCheckboxes();
@@ -102,7 +116,7 @@ function selectLastNMessages(n) {
     $("#cc_select_mode_btn .cc_qbtn_label").text("Select: ON");
 
     toastr.success(
-        `Selected the last ${autoSelectedMessages.length} message(s) from the bottom.`,
+        `Selected the last ${found} message(s) from the bottom.`,
         "Chat Copier",
     );
 }
@@ -124,8 +138,6 @@ function getRenderedMessageText(messageIndex) {
     return $textElement.text().trim();
 }
 
-// Returns the newest N non-system messages, counted from the bottom of the
-// complete SillyTavern chat array, while preserving normal reading order.
 function getLastNMessages(n) {
     const limit = Math.max(0, Number.parseInt(n, 10) || 0);
     if (limit === 0) return [];
@@ -145,8 +157,6 @@ function getLastNMessages(n) {
 
     collected.reverse();
 
-    // During or immediately after generation, ctx.chat can lag a few words
-    // behind the text already visible in the newest rendered message.
     const newest = collected[collected.length - 1];
     if (newest) {
         const renderedText = getRenderedMessageText(newest.chatIndex);
@@ -169,8 +179,8 @@ function getAllMessages() {
 // ── Formatting ────────────────────────────────────────────────────
 
 function formatMessage(message, settings) {
-    const role = message.is_user ? "User" : message.name || "Character";
-    const text = String(message.mes ?? "");
+    const role = message.is_user ? "User" : message.name || message.role || "Character";
+    const text = String(message.mes || message.text || message.content || "");
 
     let formatted = settings.includeNames
         ? settings.copyFormat === "markdown"
@@ -226,15 +236,11 @@ async function copyToClipboard(text, count) {
         return;
     }
 
-    // Use a synchronous ClipboardEvent first. On Android WebView this avoids
-    // selection-length and delayed-write issues that can truncate the tail of
-    // larger clipboard payloads.
     if (copyWithClipboardEvent(clipboardText)) {
         toastr.success(`Copied ${count} message(s) to clipboard!`, "Chat Copier");
         return;
     }
 
-    // Standards-based fallback.
     try {
         if (navigator.clipboard && window.isSecureContext) {
             await navigator.clipboard.writeText(clipboardText);
@@ -245,7 +251,6 @@ async function copyToClipboard(text, count) {
         console.warn("[Chat Copier] Clipboard API failed.", error);
     }
 
-    // Final fallback using a visible-size textarea and a synchronous selection.
     const textarea = document.createElement("textarea");
     textarea.value = clipboardText;
     textarea.setAttribute("readonly", "");
@@ -341,9 +346,6 @@ function getChatFilenamePrefix() {
 }
 
 function actionCopySelected() {
-    // Auto Select 50/100 is an export mode. Copy Tick must always download
-    // those messages as TXT, just like the dedicated 30 TXT and All TXT
-    // actions, rather than relying on clipboard size or rendered checkboxes.
     if (autoSelectionExportCount === 50 || autoSelectionExportCount === 100) {
         const selected = getLastNMessages(autoSelectionExportCount);
 
@@ -427,8 +429,6 @@ function actionDownloadAll() {
         return;
     }
 
-    // Refresh the newest message from the rendered DOM so a just-finished
-    // response is not missing its final words in the exported file.
     const newest = getLastNMessages(1)[0];
     if (newest) {
         messages[messages.length - 1] = newest;
@@ -608,8 +608,6 @@ function bindEvents() {
     $(document).on("click.chatCopier", "#cc_select_last50", () => selectLastNMessages(50));
     $(document).on("click.chatCopier", "#cc_select_last100", () => selectLastNMessages(100));
     $(document).on("change.chatCopier", ".cc_mes_select", function () {
-        // Once the user manually changes a checkbox, return to normal manual
-        // selection semantics rather than keeping the 50/100 snapshot locked.
         autoSelectedMessages = null;
         autoSelectionExportCount = 0;
         const messageId = Number($(this).closest(".mes").attr("mesid"));
