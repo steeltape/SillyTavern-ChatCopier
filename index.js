@@ -38,8 +38,14 @@ function getChatMessages() {
     return getContext().chat ?? [];
 }
 
+// FIX: More inclusive filter – include all user/character messages
+// that have a 'mes' field. Exclude only explicit system messages.
 function isRealMessage(message) {
-    return Boolean(message) && !message.is_system;
+    if (!message) return false;
+    // Explicit system messages are excluded
+    if (message.is_system === true) return false;
+    // Include messages that have content and are from a known actor
+    return message.mes !== undefined && (message.is_user || message.name);
 }
 
 function cloneMessage(message) {
