@@ -10,6 +10,7 @@ const DEFAULT_SETTINGS = {
     copyFormat: "plain",
     includeNames: true,
     includeTimestamps: false,
+    includeSystem: false,
 };
 
 // ── Settings ─────────────────────────────────────────────────────
@@ -48,7 +49,8 @@ function isRealMessage(message) {
     if (!message) return false;
 
     // Must have text content
-    const text = message.mes || message.text || message.content || "";
+    if (!getSettings().includeSystem && message.is_system) return false;
+    const text = String(message.mes || message.text || message.content || "");
     if (!text || text.trim() === "") return false;
 
     // Accept if it's a user, has a name, or a recognized role
@@ -60,114 +62,57 @@ function cloneMessage(message) {
 }
 
 const selectedMessageIds = new Set();
-let autoSelectedMessages = null;
-let autoSelectionExportCount = 0;
-
-function getSelectedMessages() {
-    if (Array.isArray(autoSelectedMessages) && autoSelectedMessages.length) {
-        return autoSelectedMessages.map(cloneMessage);
-    }
-
-    const messages = getChatMessages();
-    const selected = [];
-
-    [...selectedMessageIds]
-        .sort((a, b) => a - b)
-        .forEach((messageId) => {
-            if (messageId < 0 || messageId >= messages.length) return;
-            const message = messages[messageId];
-            if (isRealMessage(message)) selected.push(cloneMessage(message));
-        });
-
-    return selected;
+// Keep object references: deletion cannot silently shift a selection to another message.
+const selectedMessages = new Map();
+let selectionChat = null;
+let selectionKey = null;
+function chatKey() {
+    const c = getContext();
+    return JSON.stringify([c.chatId ?? c.getCurrentChatId?.() ?? null, c.characterId, c.groupId]);
 }
-
-function selectLastNMessages(n) {
-    const limit = Math.max(0, Number.parseInt(n, 10) || 0);
-    const messages = getChatMessages();
-
-    console.log(`[Chat Copier] Selecting last ${limit} messages. Chat length: ${messages.length}`);
-
-    // Debug: show first few messages
-    if (messages.length > 0) {
-        console.log("[Chat Copier] Sample message keys:", Object.keys(messages[0]));
-        console.log("[Chat Copier] Sample message:", messages[0]);
-    }
-
-    autoSelectedMessages = getLastNMessages(limit).map(cloneMessage);
-    autoSelectionExportCount = limit;
+function reconcileSelection() {
+    const chat = getChatMessages();
+    const key = chatKey();
+    if (selectionChat !== chat || selectionKey !== key) selectedMessages.clear();
+    selectionChat = chat;
+    selectionKey = key;
     selectedMessageIds.clear();
-
-    let found = 0;
-    for (let index = messages.length - 1; index >= 0 && found < limit; index--) {
-        if (isRealMessage(messages[index])) {
-            selectedMessageIds.add(index);
-            found++;
-        }
+    for (const message of selectedMessages.keys()) {
+        const index = chat.indexOf(message);
+        if (index < 0 || !isRealMessage(message)) selectedMessages.delete(message);
+        else selectedMessageIds.add(index);
     }
-
-    console.log(`[Chat Copier] Actually found ${found} real messages.`);
-
-    if (!selectMode) selectMode = true;
+    $("#cc_count").text(`${selectedMessages.size} selected`);
+}
+function getSelectedMessages() {
+    reconcileSelection();
+    return getChatMessages().filter(m => selectedMessages.has(m)).map(cloneMessage);
+}
+function selectIndices(indices) {
+    reconcileSelection();
+    selectedMessages.clear();
+    const chat = getChatMessages();
+    for (const index of indices) if (isRealMessage(chat[index])) selectedMessages.set(chat[index], true);
+    if (!selectMode) toggleSelectMode();
+    reconcileSelection();
     injectCheckboxes();
-    syncCheckboxesFromSelection();
-
-    $("#cc_select_mode_btn").addClass("cc_active");
-    $("#cc_select_mode_btn .cc_qbtn_label").text("Select: ON");
-
-    toastr.success(
-        `Selected the last ${found} message(s) from the bottom.`,
-        "Chat Copier",
-    );
+}
+function selectLastNMessages(n) {
+    const chat = getChatMessages();
+    const ids = chat.map((m, i) => isRealMessage(m) ? i : -1).filter(i => i >= 0);
+    selectIndices(ids.slice(-n));
 }
 
 function syncCheckboxesFromSelection() {
-    $(".mes").not(".system_message").each(function () {
+    $("#chat .mes").each(function () {
         const messageId = Number($(this).attr("mesid"));
         $(this).find(".cc_mes_select").prop("checked", selectedMessageIds.has(messageId));
     });
 }
 
-function getRenderedMessageText(messageIndex) {
-    const $messageElement = $(`.mes[mesid="${messageIndex}"]`).last();
-    if (!$messageElement.length) return "";
-
-    const $textElement = $messageElement.find(".mes_text").first();
-    if (!$textElement.length) return "";
-
-    return $textElement.text().trim();
-}
-
 function getLastNMessages(n) {
     const limit = Math.max(0, Number.parseInt(n, 10) || 0);
-    if (limit === 0) return [];
-
-    const chat = getChatMessages();
-    const collected = [];
-
-    for (let index = chat.length - 1; index >= 0 && collected.length < limit; index--) {
-        const message = chat[index];
-        if (!isRealMessage(message)) continue;
-
-        collected.push({
-            message: cloneMessage(message),
-            chatIndex: index,
-        });
-    }
-
-    collected.reverse();
-
-    const newest = collected[collected.length - 1];
-    if (newest) {
-        const renderedText = getRenderedMessageText(newest.chatIndex);
-        const storedText = String(newest.message.mes ?? "").trim();
-
-        if (renderedText && renderedText.length >= storedText.length) {
-            newest.message.mes = renderedText;
-        }
-    }
-
-    return collected.map((entry) => entry.message);
+    return limit ? getAllMessages().slice(-limit) : [];
 }
 
 function getAllMessages() {
@@ -178,9 +123,23 @@ function getAllMessages() {
 
 // ── Formatting ────────────────────────────────────────────────────
 
+// Use the host Markdown converter in an inert document; preserve block boundaries.
+function plainText(raw) {
+    const host = getContext().showdown;
+    const converter = host?.makeHtml ? host : window.showdown?.Converter ? new window.showdown.Converter() : null;
+    if (!converter?.makeHtml) return raw; // Lossless fallback if the host lacks a converter.
+    const doc = new DOMParser().parseFromString(converter.makeHtml(raw), "text/html");
+    doc.querySelectorAll("script,style").forEach(n => n.remove());
+    doc.querySelectorAll("br").forEach(n => n.replaceWith("\n"));
+    doc.querySelectorAll("img").forEach(n => n.replaceWith(n.getAttribute("alt") || ""));
+    doc.querySelectorAll("p,div,li,blockquote,pre,h1,h2,h3,h4,h5,h6,tr").forEach(n => n.append("\n\n"));
+    return doc.body.textContent.replace(/\n[ \t]+/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
 function formatMessage(message, settings) {
-    const role = message.is_user ? "User" : message.name || message.role || "Character";
-    const text = String(message.mes || message.text || message.content || "");
+    const role = message.name || (message.is_user ? "User" : message.role || "Character");
+    const raw = String(message.mes || message.text || message.content || "");
+    const text = settings.copyFormat === "plain" ? plainText(raw) : raw;
 
     let formatted = settings.includeNames
         ? settings.copyFormat === "markdown"
@@ -225,6 +184,8 @@ function copyWithClipboardEvent(text) {
         console.warn("[Chat Copier] execCommand copy failed.", error);
         document.removeEventListener("copy", onCopy, { capture: true });
         return false;
+    } finally {
+        document.removeEventListener("copy", onCopy, { capture: true });
     }
 }
 
@@ -279,7 +240,7 @@ async function copyToClipboard(text, count) {
     if (copied) {
         toastr.success(`Copied ${count} message(s) to clipboard!`, "Chat Copier");
     } else {
-        toastr.error("Android blocked clipboard access.", "Chat Copier");
+        toastr.error("Clipboard access failed. Use Download selected instead.", "Chat Copier");
     }
 }
 
@@ -293,7 +254,7 @@ function downloadTextFile(text, filename) {
     const anchor = document.createElement("a");
 
     anchor.href = url;
-    anchor.download = filename;
+    anchor.download = getSettings().copyFormat === "markdown" ? filename.replace(/\.txt$/i, ".md") : filename;
     anchor.style.display = "none";
 
     document.body.appendChild(anchor);
@@ -346,49 +307,14 @@ function getChatFilenamePrefix() {
 }
 
 function actionCopySelected() {
-    if (autoSelectionExportCount === 50 || autoSelectionExportCount === 100) {
-        const selected = getLastNMessages(autoSelectionExportCount);
-
-        if (selected.length === 0) {
-            toastr.warning("No messages selected.", "Chat Copier");
-            return;
-        }
-
-        downloadTextFile(
-            messagesToText(selected),
-            `${getChatFilenamePrefix()} - Last ${selected.length}.txt`,
-        );
-
-        toastr.success(
-            `Downloaded the last ${selected.length} message(s) as TXT.`,
-            "Chat Copier",
-        );
-        return;
-    }
-
-    const selected = getSelectedMessages();
-
-    if (selected.length === 0) {
-        toastr.warning("No messages selected.", "Chat Copier");
-        return;
-    }
-
-    const text = messagesToText(selected);
-
-    if (selected.length > 20) {
-        downloadTextFile(
-            text,
-            `${getChatFilenamePrefix()} - Selected ${selected.length}.txt`,
-        );
-
-        toastr.success(
-            `Downloaded ${selected.length} selected message(s) as TXT.`,
-            "Chat Copier",
-        );
-        return;
-    }
-
-    copyToClipboard(text, selected.length);
+    const messages = getSelectedMessages();
+    if (!messages.length) return toastr.warning("No messages selected.", "Chat Copier");
+    return copyToClipboard(messagesToText(messages), messages.length);
+}
+function actionDownloadSelected() {
+    const messages = getSelectedMessages();
+    if (!messages.length) return toastr.warning("No messages selected.", "Chat Copier");
+    downloadTextFile(messagesToText(messages), `${getChatFilenamePrefix()} - Selected ${messages.length}.txt`);
 }
 
 async function actionCopyLastN(n) {
@@ -412,7 +338,7 @@ function actionDownloadLastN(n) {
 
     downloadTextFile(
         messagesToText(messages),
-        `${getChatFilenamePrefix()} - Last ${n}.txt`,
+        `${getChatFilenamePrefix()} - Last ${messages.length}.txt`,
     );
 
     toastr.success(
@@ -427,11 +353,6 @@ function actionDownloadAll() {
     if (messages.length === 0) {
         toastr.warning("No messages to export.", "Chat Copier");
         return;
-    }
-
-    const newest = getLastNMessages(1)[0];
-    if (newest) {
-        messages[messages.length - 1] = newest;
     }
 
     downloadTextFile(
@@ -450,9 +371,10 @@ function actionDownloadAll() {
 let selectMode = false;
 
 function injectCheckboxes() {
+    reconcileSelection();
     if (!selectMode) return;
 
-    $(".mes").not(".system_message").each(function () {
+    $("#chat .mes").each(function () {
         const $message = $(this);
         if ($message.find(".cc_mes_select").length) return;
 
@@ -461,6 +383,7 @@ function injectCheckboxes() {
             .first();
 
         const messageId = Number($message.attr("mesid"));
+        if (!isRealMessage(getChatMessages()[messageId])) return;
         const checked = selectedMessageIds.has(messageId) ? " checked" : "";
         const checkbox = `<input type="checkbox" class="cc_mes_select" title="Select this message"${checked} />`;
         $header.length ? $header.prepend(checkbox) : $message.prepend(checkbox);
@@ -482,8 +405,8 @@ function toggleSelectMode() {
         $("#cc_select_mode_btn .cc_qbtn_label").text("Select: ON");
     } else {
         selectedMessageIds.clear();
-        autoSelectedMessages = null;
-        autoSelectionExportCount = 0;
+        selectedMessages.clear();
+        reconcileSelection();
         removeCheckboxes();
         $("#cc_select_mode_btn").removeClass("cc_active");
         $("#cc_select_mode_btn .cc_qbtn_label").text("Select: OFF");
@@ -497,34 +420,42 @@ function buildQuickMenu() {
 
     const html = `
     <div id="cc_quick_menu" class="cc_quick_menu">
-        <div id="cc_select_mode_btn" class="cc_qbtn" title="Toggle selection mode">
+        <button type="button" id="cc_select_mode_btn" class="cc_qbtn" title="Toggle selection mode">
             <i class="fa fa-check-square"></i>
             <span class="cc_qbtn_label">Select: OFF</span>
-        </div>
-        <div id="cc_copy_selected" class="cc_qbtn" title="Copy or download ticked messages">
+        </button>
+        <button type="button" id="cc_copy_selected" class="cc_qbtn" title="Copy selected messages to clipboard">
             <i class="fa fa-copy"></i>
-            <span class="cc_qbtn_label">Copy Tick</span>
-        </div>
-        <div id="cc_select_last50" class="cc_qbtn" title="Automatically select the last 50 messages">
+            <span class="cc_qbtn_label">Copy selected</span>
+        </button>
+        <button type="button" id="cc_select_last50" class="cc_qbtn" title="Automatically select the last 50 messages">
             <i class="fa fa-list-check"></i>
             <span class="cc_qbtn_label">Select 50</span>
-        </div>
-        <div id="cc_select_last100" class="cc_qbtn" title="Automatically select the last 100 messages">
+        </button>
+        <button type="button" id="cc_select_last100" class="cc_qbtn" title="Automatically select the last 100 messages">
             <i class="fa fa-list-check"></i>
             <span class="cc_qbtn_label">Select 100</span>
-        </div>
-        <div id="cc_copy_last10" class="cc_qbtn" title="Copy last 10 messages from the bottom">
+        </button>
+        <button type="button" id="cc_copy_last10" class="cc_qbtn" title="Copy last 10 messages from the bottom">
             <i class="fa fa-history"></i>
             <span class="cc_qbtn_label">10</span>
-        </div>
-        <div id="cc_copy_last30" class="cc_qbtn" title="Download last 30 messages as TXT">
+        </button>
+        <button type="button" id="cc_copy_last30" class="cc_qbtn" title="Download last 30 messages as TXT">
             <i class="fa fa-download"></i>
             <span class="cc_qbtn_label">30 TXT</span>
-        </div>
-        <div id="cc_copy_all" class="cc_qbtn" title="Download entire chat as TXT">
+        </button>
+        <button type="button" id="cc_copy_all" class="cc_qbtn" title="Download entire chat as TXT">
             <i class="fa fa-file-download"></i>
             <span class="cc_qbtn_label">All TXT</span>
-        </div>
+        </button>
+        <button type="button" id="cc_download_selected" class="cc_qbtn">Download selected</button>
+        <span id="cc_count" aria-live="polite">0 selected</span>
+        <label>Last <input id="cc_custom_n" type="number" min="1" step="1" value="100" /></label>
+        <button type="button" id="cc_custom_select" class="cc_qbtn">Select last N</button>
+        <label>From # <input id="cc_from" type="number" min="0" step="1" value="0" /></label>
+        <label>To # <input id="cc_to" type="number" min="0" step="1" value="99" /></label>
+        <button type="button" id="cc_range" class="cc_qbtn">Select range</button>
+        <small>Range uses zero-based chat message IDs, inclusive.</small>
     </div>`;
 
     $("#extensionsMenu").append(html);
@@ -553,11 +484,12 @@ function buildSettingsPanel() {
                         <input type="checkbox" id="cc_include_timestamps" ${settings.includeTimestamps ? "checked" : ""}/>
                         <span>Include Timestamps</span>
                     </label>
+                    <label class="checkbox_label"><input type="checkbox" id="cc_include_system" ${settings.includeSystem ? "checked" : ""}/><span>Include system messages</span></label>
                     <label class="checkbox_label">
                         <span>Format:</span>
                         <select id="cc_format">
-                            <option value="plain" ${settings.copyFormat === "plain" ? "selected" : ""}>Plain</option>
-                            <option value="markdown" ${settings.copyFormat === "markdown" ? "selected" : ""}>Markdown</option>
+                            <option value="plain" ${settings.copyFormat === "plain" ? "selected" : ""}>Clean plain text</option>
+                            <option value="markdown" ${settings.copyFormat === "markdown" ? "selected" : ""}>Original Markdown</option>
                         </select>
                     </label>
                 </div>
@@ -582,6 +514,7 @@ function setupObserver() {
 
     observer?.disconnect();
     observer = new MutationObserver((mutations) => {
+        reconcileSelection();
         if (!selectMode) return;
 
         const hasNewMessage = mutations.some((mutation) =>
@@ -608,13 +541,32 @@ function bindEvents() {
     $(document).on("click.chatCopier", "#cc_select_last50", () => selectLastNMessages(50));
     $(document).on("click.chatCopier", "#cc_select_last100", () => selectLastNMessages(100));
     $(document).on("change.chatCopier", ".cc_mes_select", function () {
-        autoSelectedMessages = null;
-        autoSelectionExportCount = 0;
+        reconcileSelection();
         const messageId = Number($(this).closest(".mes").attr("mesid"));
         if (!Number.isInteger(messageId)) return;
 
-        if ($(this).prop("checked")) selectedMessageIds.add(messageId);
-        else selectedMessageIds.delete(messageId);
+        const message = getChatMessages()[messageId];
+        if ($(this).prop("checked") && isRealMessage(message)) selectedMessages.set(message, true);
+        else selectedMessages.delete(message);
+        reconcileSelection();
+    });
+    $(document).on("click.chatCopier", "#cc_download_selected", actionDownloadSelected);
+    $(document).on("click.chatCopier", "#cc_custom_select", () => {
+        const n = Number($("#cc_custom_n").val());
+        if (!Number.isSafeInteger(n) || n < 1) return toastr.warning("Enter a positive whole number.");
+        selectLastNMessages(n);
+    });
+    $(document).on("click.chatCopier", "#cc_range", () => {
+        const start = Number($("#cc_from").val()), end = Number($("#cc_to").val());
+        const length = getChatMessages().length;
+        if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || end < start || end >= length)
+            return toastr.warning(`Use a range from 0 to ${Math.max(0, length - 1)}.`);
+        selectIndices(Array.from({length: end - start + 1}, (_, i) => start + i));
+    });
+    $(document).on("change.chatCopier", "#cc_include_system", function () {
+        updateSetting("includeSystem", $(this).prop("checked"));
+        removeCheckboxes();
+        injectCheckboxes();
     });
     $(document).on("click.chatCopier", "#cc_copy_last10", () => actionCopyLastN(10));
     $(document).on("click.chatCopier", "#cc_copy_last30", () => actionDownloadLastN(30));

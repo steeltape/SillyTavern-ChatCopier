@@ -86,3 +86,7 @@
     float: left;
     margin-top: 2px;
 }
+.cc_quick_menu input[type="number"] { width: 6em; }
+.cc_quick_menu button { color: inherit; background: transparent; border: 1px solid var(--SmartThemeBorderColor, #666); border-radius: 5px; }
+.cc_quick_menu button:focus-visible { outline: 2px solid currentColor; }
+#cc_count { width: 100%; }
