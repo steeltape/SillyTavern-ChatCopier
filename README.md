@@ -41,6 +41,8 @@ No chat text is logged. Automatic updates are disabled for this modified package
 
 ## Validation
 
+checkout my sillytavern casual romance preset : https://mypapercraft.net/sillytavern-preset-for-office-romance-casual-lifestyle-roleplay
+
 JavaScript syntax and isolated regression checks passed for selection after new
 messages, deletion, chat switching, system filtering, persona names, empty counts,
 and clipboard listener cleanup. Not tested in a live SillyTavern/TauriTavern app;
