@@ -44,7 +44,7 @@ function getChatMessages() {
     return chat;
 }
 
-// Accept all conversation messages – include those with 'name' even if is_system is true.
+// Apply the configured system-message filter to every selection method.
 function isRealMessage(message) {
     if (!message) return false;
 
@@ -376,14 +376,18 @@ function injectCheckboxes() {
 
     $("#chat .mes").each(function () {
         const $message = $(this);
-        if ($message.find(".cc_mes_select").length) return;
+
 
         const $header = $message
             .find(".mes_block, .mesHeader, .mes_text_wrapper, .mesTextWrapper")
             .first();
 
         const messageId = Number($message.attr("mesid"));
-        if (!isRealMessage(getChatMessages()[messageId])) return;
+        if (!Number.isInteger(messageId) || !isRealMessage(getChatMessages()[messageId])) {
+            $message.find(".cc_mes_select").remove();
+            return;
+        }
+        if ($message.find(".cc_mes_select").length) return;
         const checked = selectedMessageIds.has(messageId) ? " checked" : "";
         const checkbox = `<input type="checkbox" class="cc_mes_select" title="Select this message"${checked} />`;
         $header.length ? $header.prepend(checkbox) : $message.prepend(checkbox);
@@ -449,13 +453,12 @@ function buildQuickMenu() {
             <span class="cc_qbtn_label">All TXT</span>
         </button>
         <button type="button" id="cc_download_selected" class="cc_qbtn">Download selected</button>
+        <button type="button" id="cc_manual_list" class="cc_qbtn">Browse messages to tick</button>
         <span id="cc_count" aria-live="polite">0 selected</span>
-        <label>Last <input id="cc_custom_n" type="number" min="1" step="1" value="100" /></label>
-        <button type="button" id="cc_custom_select" class="cc_qbtn">Select last N</button>
-        <label>From # <input id="cc_from" type="number" min="0" step="1" value="0" /></label>
-        <label>To # <input id="cc_to" type="number" min="0" step="1" value="99" /></label>
+        <label>From # <input id="cc_from" type="number" min="0" step="1" value="100" /></label>
+        <label>To # <input id="cc_to" type="number" min="0" step="1" value="230" /></label>
         <button type="button" id="cc_range" class="cc_qbtn">Select range</button>
-        <small>Range uses zero-based chat message IDs, inclusive.</small>
+        <small>Use the # numbers shown on messages. Both endpoints are included.</small>
     </div>`;
 
     $("#extensionsMenu").append(html);
@@ -513,22 +516,77 @@ function setupObserver() {
     }
 
     observer?.disconnect();
-    observer = new MutationObserver((mutations) => {
-        reconcileSelection();
+    observer = new MutationObserver(() => {
         if (!selectMode) return;
-
-        const hasNewMessage = mutations.some((mutation) =>
-            Array.from(mutation.addedNodes).some(
-                (node) =>
-                    node.nodeType === Node.ELEMENT_NODE &&
-                    (node.classList?.contains("mes") || node.querySelector?.(".mes")),
-            ),
-        );
-
-        if (hasNewMessage) window.setTimeout(injectCheckboxes, 300);
+        window.clearTimeout(checkboxRefreshTimer);
+        checkboxRefreshTimer = window.setTimeout(injectCheckboxes, 100);
     });
+    observer.observe(chatElement, { childList: true, subtree: true, attributes: true, attributeFilter: ["mesid"] });
+}
+let checkboxRefreshTimer = null;
+let manualDialog = null;
+function openManualList() {
+    reconcileSelection();
+    manualDialog?.remove();
+    const dialog = document.createElement("dialog");
+    manualDialog = dialog;
+    dialog.id = "cc_manual_dialog";
+    dialog.setAttribute("aria-label", "Select chat messages");
+    const title = document.createElement("h3");
+    title.textContent = "Tick messages to export";
+    const hint = document.createElement("p");
+    hint.textContent = "Includes older messages available in chat data. System-message filtering follows your settings.";
+    const status = document.createElement("p");
+    status.setAttribute("aria-live", "polite");
+    const list = document.createElement("div");
+    list.className = "cc_manual_rows";
+    const chat = getChatMessages();
+    const key = chatKey();
+    const rows = document.createDocumentFragment();
+    let eligible = 0;
+    const refreshCount = () => { status.textContent = `${selectedMessages.size} selected · ${eligible} available`; };
+    chat.forEach((message, index) => {
+        if (!isRealMessage(message)) return;
+        eligible++;
+        const label = document.createElement("label");
+        const checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.checked = selectedMessages.has(message);
+        const preview = document.createElement("span");
+        const name = message.name || (message.is_user ? "User" : "Character");
+        preview.textContent = `#${index} ${name}: ${String(message.mes || message.text || message.content || "").slice(0, 240)}`;
+        checkbox.addEventListener("change", () => {
+            reconcileSelection();
+            if (getChatMessages() !== chat || chatKey() !== key || !chat.includes(message)) {
+                dialog.close();
+                toastr.warning("The chat changed. Open the message list again.");
+                return;
+            }
+            if (checkbox.checked) selectedMessages.set(message, true);
+            else selectedMessages.delete(message);
+            reconcileSelection();
+            syncCheckboxesFromSelection();
+            refreshCount();
+        });
+        label.append(checkbox, preview);
+        rows.append(label);
+    });
+    list.append(rows);
+    refreshCount();
+    const actions = document.createElement("div");
+    actions.className = "cc_manual_actions";
+    for (const [text, action] of [["Copy selected", actionCopySelected], ["Download selected", actionDownloadSelected], ["Done", () => dialog.close()]]) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.textContent = text;
+        button.addEventListener("click", action);
+        actions.append(button);
+    }
+    dialog.append(title, hint, status, list, actions);
+    dialog.addEventListener("close", () => { dialog.remove(); if (manualDialog === dialog) manualDialog = null; });
+    document.body.append(dialog);
+    dialog.showModal();
 
-    observer.observe(chatElement, { childList: true, subtree: true });
 }
 
 // ── Event binding ─────────────────────────────────────────────────
@@ -538,6 +596,7 @@ function bindEvents() {
 
     $(document).on("click.chatCopier", "#cc_select_mode_btn", toggleSelectMode);
     $(document).on("click.chatCopier", "#cc_copy_selected", actionCopySelected);
+    $(document).on("click.chatCopier", "#cc_manual_list", openManualList);
     $(document).on("click.chatCopier", "#cc_select_last50", () => selectLastNMessages(50));
     $(document).on("click.chatCopier", "#cc_select_last100", () => selectLastNMessages(100));
     $(document).on("change.chatCopier", ".cc_mes_select", function () {
@@ -551,11 +610,6 @@ function bindEvents() {
         reconcileSelection();
     });
     $(document).on("click.chatCopier", "#cc_download_selected", actionDownloadSelected);
-    $(document).on("click.chatCopier", "#cc_custom_select", () => {
-        const n = Number($("#cc_custom_n").val());
-        if (!Number.isSafeInteger(n) || n < 1) return toastr.warning("Enter a positive whole number.");
-        selectLastNMessages(n);
-    });
     $(document).on("click.chatCopier", "#cc_range", () => {
         const start = Number($("#cc_from").val()), end = Number($("#cc_to").val());
         const length = getChatMessages().length;

@@ -90,3 +90,12 @@
 .cc_quick_menu button { color: inherit; background: transparent; border: 1px solid var(--SmartThemeBorderColor, #666); border-radius: 5px; }
 .cc_quick_menu button:focus-visible { outline: 2px solid currentColor; }
 #cc_count { width: 100%; }
+
+#cc_manual_dialog { width: min(720px, 94vw); max-height: 88vh; padding: 16px; color: var(--SmartThemeBodyColor, #eee); background: var(--SmartThemeBlurTintColor, #222); border: 1px solid #888; border-radius: 10px; }
+#cc_manual_dialog::backdrop { background: #0009; }
+#cc_manual_dialog .cc_manual_rows { max-height: 55vh; overflow-y: auto; }
+#cc_manual_dialog label { display: flex; align-items: flex-start; gap: 12px; padding: 10px 4px; border-bottom: 1px solid #8885; text-align: left; }
+#cc_manual_dialog input { flex: 0 0 22px; width: 22px; height: 22px; }
+#cc_manual_dialog span { white-space: pre-wrap; overflow-wrap: anywhere; }
+#cc_manual_dialog .cc_manual_actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+#cc_manual_dialog button { padding: 10px; color: inherit; background: transparent; border: 1px solid #888; border-radius: 5px; }

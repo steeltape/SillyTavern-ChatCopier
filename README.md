@@ -1,4 +1,4 @@
-# Chat Copier 1.1.0
+# Chat Copier 1.1.1
 
 Updated from the supplied Chat Copier 1.0.0 archive.
 
@@ -19,7 +19,7 @@ This ZIP is a source package; ZIP import support depends on your app.
 
 - Select ON/OFF adds/removes message checkboxes. Turning OFF clears selection.
 - Copy selected always copies; Download selected always downloads.
-- Select 50, Select 100, and custom Last N select a fixed set of messages.
+- Select 50 and Select 100 select a fixed set of messages. The custom Last N input has been removed.
 - From # / To # use zero-based chat message IDs, inclusive (0 is the first message).
 - 10 copies the latest ten eligible messages. 30 TXT and All TXT download exports.
 - Original Markdown preserves stored message text and uses .md for downloads.
@@ -41,9 +41,24 @@ No chat text is logged. Automatic updates are disabled for this modified package
 
 ## Validation
 
-checkout my sillytavern casual romance preset : https://mypapercraft.net/sillytavern-preset-for-office-romance-casual-lifestyle-roleplay
-
 JavaScript syntax and isolated regression checks passed for selection after new
 messages, deletion, chat switching, system filtering, persona names, empty counts,
 and clipboard listener cleanup. Not tested in a live SillyTavern/TauriTavern app;
 clipboard, downloads, and theme layout still need a check on your device.
+
+## 1.1.1 selection update
+
+Use From # 100 / To # 230 to select that inclusive range (131 messages before
+system/empty-message filtering). The numbers match chat message IDs, starting at 0.
+Existing 10/30/50/100 shortcuts are retained.
+
+Inline checkboxes apply to displayed messages. Scroll/load older messages to use
+them inline, or choose Browse messages to tick for a scrollable checklist drawn
+from all available chat data, including messages not displayed on screen. That
+list shows a message number, speaker and preview for each eligible message.
+It does not fetch missing history from the server. System messages remain subject
+to Include system messages in settings. Text previews are inserted as plain text.
+
+Checkbox refresh now also handles replaced content, removed checkboxes and changed
+message IDs. Runtime checks for the checklist used a simulated DOM, not a live
+SillyTavern/TauriTavern installation.
